@@ -1,7 +1,7 @@
 {
   "tpsServerHost": "0.0.0.0",
   "tpsServerPort": 8181,
-  "endpoint": "http://test1.peaq.network:10044",
+  "endpoint": "",
   "variant": "substrate",
   "deployer": {
     "address": "0xFcD3460d9bc2ef2AFc58459a0A1D8e6A21ab166F",
@@ -9,20 +9,21 @@
   },
   "fundSenders": true,
   "accounts": 100,
-  "workers": 80,
+  "workers": 100,
   "sendRawTransaction": true,
-  "timeout": 15000,
-  "tokenAddress": "0x51a16587924952Cfcde4906774808bBEA2590660",
-  "tokenMethod": "transferLoop",
+  "timeout": 30000,
+  "tokenAddress": "0x0000000000000000000000000000000000000802",
+  "tokenMethod": "addAttribute",
   "tokenAmountToMint": 1000000000,
   "tokenTransferMultiplier": 1,
   "tokenAssert": true,
-  "transactions": 50000,
+  "transactions": 1000,
   "gasLimit": "200000",
   "txpoolMaxLength": -1,
   "txpoolMultiplier": 3,
   "txpoolLimit": 7500,
   "checkersInterval": 250,
   "estimate": false,
-  "verbose": false
+  "verbose": false,
+  "targetContract": "RBAC"
 }

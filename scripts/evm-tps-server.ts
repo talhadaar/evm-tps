@@ -5,7 +5,7 @@ import axios from "axios";
 import express from "express";
 import BodyParser from "body-parser";
 
-import { ethers, network } from "hardhat";
+import { artifacts, ethers, network } from "hardhat";
 
 import { Wallet } from "@ethersproject/wallet";
 import { BigNumber } from "ethers";
@@ -13,11 +13,12 @@ import { PopulatedTransaction } from "ethers/lib/ethers";
 
 import { deploy } from "./common";
 import { Block } from "@ethersproject/providers";
-
+import { formatBytes32String, randomBytes } from "ethers/lib/utils";
+import { Contract, Web3 } from "web3";
 const EVM_TPS_ROOT_DIR = process.env.ROOT_DIR || "data";
 const EVM_TPS_CONFIG_FILE = `${EVM_TPS_ROOT_DIR}/config.json`;
 const EVM_TPS_SENDERS_FILE = `${EVM_TPS_ROOT_DIR}/senders.json`;
-const EVM_TPS_RECEIVERS_FILE = `${EVM_TPS_ROOT_DIR}/receivers.json`;
+// const EVM_TPS_RECEIVERS_FILE = `${EVM_TPS_ROOT_DIR}/receivers.json`;
 
 interface Balances {
   before: number,
@@ -83,6 +84,7 @@ interface TPSConfig {
   estimate: boolean | undefined;
   payloads: UnsignedTx[] | PopulatedTransaction[] | undefined;
   verbose: boolean;
+  targetContract: string
 }
 
 interface UnsignedTx {
@@ -141,6 +143,7 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
     estimate: false,
     payloads: undefined,
     verbose: false,
+    targetContract: ""
   };
 
   if (fs.existsSync(configFilename)) {
@@ -161,14 +164,14 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
     if (bytecode.length <= 2) tokenAddress = "";  // 0x
   }
 
-  if (tokenAddress === "" && config.payloads === undefined) {
-    const token = await deploy(deployer);
-    let tx = await token.start({ gasLimit, gasPrice });
-    await tx.wait();
-    tx = await token.mintTo(deployer.address, config.tokenAmountToMint);
-    await tx.wait();
-    config.tokenAddress = token.address;
-  }
+  // if (tokenAddress === "" && config.payloads === undefined) {
+  //   const token = await deploy(deployer);
+  //   let tx = await token.start({ gasLimit, gasPrice });
+  //   await tx.wait();
+  //   tx = await token.mintTo(deployer.address, config.tokenAmountToMint);
+  //   await tx.wait();
+  //   config.tokenAddress = token.address;
+  // }
 
   await promisify(fs.writeFile)(configFilename, JSON.stringify(config, null, 2));
 
@@ -184,15 +187,10 @@ const setTxpool = async (config: TPSConfig, deployer: Wallet) => {
   let estimateGasTx;
   if (config.payloads?.length) estimateGasTx = await ethers.provider.estimateGas(config.payloads[0]);
   else {
-    const receiver = receiversMap.get(0)!;
-    const token = (await ethers.getContractFactory("SimpleToken", deployer)).attach(config.tokenAddress);
-    // @ts-ignore
-    estimateGasTx = await token.estimateGas[config.tokenMethod](
-      config.tokenTransferMultiplier,
-      receiver.address,
-      1,
-      { gasPrice: chainGasPrice.mul(2), gasLimit: lastBlock.gasLimit.mul(2).div(3) }
-    );
+
+  const token = await ethers.getContractAt("RBAC", config.tokenAddress, deployer);
+  estimateGasTx = await token.estimateGas.addRole(randomBytes(32), randomBytes(32));
+    console.log("Gas estimated:- ", gasLimit);
   }
 
   if (estimateGasTx.gt(gasLimit)) {
@@ -226,7 +224,6 @@ const setTxpool = async (config: TPSConfig, deployer: Wallet) => {
 const setupAccounts = async (
   config: TPSConfig,
   sendersFilename: string,
-  receiversFilename: string
 ) => {
 
   const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -239,13 +236,6 @@ const setupAccounts = async (
     for (let k of Object.keys(keysByIds)) {
       account = new ethers.Wallet(keysByIds[k].privateKey, staticProvider);
       sendersMap.set(parseInt(k), account);
-    }
-
-    keysByIds = await readJSON(receiversFilename);
-    console.log(`[setupAccounts] Reading ${Object.keys(keysByIds).length} receivers' accounts...`);
-    for (let k of Object.keys(keysByIds)) {
-      account = new ethers.Wallet(keysByIds[k].privateKey, staticProvider);
-      receiversMap.set(parseInt(k), account);
     }
 
     return;
@@ -265,7 +255,6 @@ const setupAccounts = async (
   }
 
   await promisify(fs.writeFile)(sendersFilename, JSON.stringify(senders, null, 2));
-  await promisify(fs.writeFile)(receiversFilename, JSON.stringify(receivers, null, 2));
 }
 
 const post = async (config: TPSConfig, method: string, params: any[]) => {
@@ -368,22 +357,12 @@ const sendRawTransaction = async (
   const sender = sendersMap.get(k)!;
   const receiver = receiversMap.get(k)!;
 
-  const token = (await ethers.getContractFactory("SimpleToken", sender)).attach(config.tokenAddress);
+  // // const token = (await ethers.getContractFactory("SimpleToken", sender)).attach(config.tokenAddress);
 
-  // @ts-ignore
-  let unsigned = await token.populateTransaction[config.tokenMethod](config.tokenTransferMultiplier, receiver.address, 1);
-  unsigned = {
-    ...unsigned,
-    gasLimit,
-    gasPrice,
-    nonce,
-    chainId,
-  };
-  let payload = await sender.signTransaction(unsigned);
-  let data = await post(config, "eth_sendRawTransaction", [payload]);
-  let txHash = data.result;
-  if (!validTxHash(txHash)) throw Error(`[ERROR] sendRawTransaction() -> ${JSON.stringify(data)}`);
-  return txHash;
+  const token = await ethers.getContractAt("RBAC", config.tokenAddress, sender);
+  const tx = await token.addRole(randomBytes(32), randomBytes(32));
+  if (!validTxHash(tx.hash)) throw Error(`[ERROR] sendRawTransaction() -> ${JSON.stringify(tx)}`);
+  return tx.hash;
 }
 
 const blockTracker = async (config: TPSConfig) => {
@@ -688,9 +667,10 @@ const autoSendRawTransaction = async (
       let nextNonce = nonce + 1;
       nonceMap.set(senderKey, nextNonce);
 
-      let amounts = rcvBalances.get(senderKey)!;
-      amounts.after += config.tokenTransferMultiplier;
-      rcvBalances.set(senderKey, amounts);
+      // no need to update balances now
+      // let amounts = rcvBalances.get(senderKey)!;
+      // amounts.after += config.tokenTransferMultiplier;
+      // rcvBalances.set(senderKey, amounts);
     } else { throw Error(`Invalid txHash: ${txHash}`) }
   } catch (error: any) {
     sendersErrMap.set(senderKey, sendersErrMap.get(senderKey)! + 1);
@@ -747,11 +727,12 @@ const auto = async (config: TPSConfig, gasLimit: BigNumber, chainId: number) => 
     // Wait till no more running workers.
     while (workersMap.size > 0) { await new Promise(r => setTimeout(r, 5)) };
 
+    console.log("Calculating tps....");
     let tpsResult = await calculateTPS(config, chainId, startingBlock);
     reqErrorsMap.clear();
     reqErrCounter = 0;
 
-    if (config.tokenAssert) await assertTokenBalances(config);
+    // if (config.tokenAssert) await assertTokenBalances(config);
 
     lastTxHash = "";
 
@@ -774,16 +755,21 @@ const setup = async () => {
 
   resetMaps(config);
 
-  await setupAccounts(config, EVM_TPS_SENDERS_FILE, EVM_TPS_RECEIVERS_FILE);
+  await setupAccounts(config, EVM_TPS_SENDERS_FILE);
+  console.log("(setup):- Accounts setup.");
 
-  let deployerNonce = await checkTokenBalances(config, deployer);
+  // Dont need to fund with token now
+  let deployerNonce = await deployer.getTransactionCount();
   if (config.fundSenders) await checkETHBalances(config, deployer, deployerNonce!);
+  console.log("(setup):-Checked and funded ETH balances.");
 
   await updateNonces(config);
-  await updateBalances(config);
+  console.log("(setup):- Updated nonces.");
+  // dont need to maintain token balances
+  // await updateBalances(config);
 
   config = await setTxpool(config, deployer);
-
+  console.log("(setup):- TX Pool set.");
   console.log(JSON.stringify(config, null, 2));
 
   hardstop = false;
