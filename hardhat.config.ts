@@ -28,7 +28,7 @@ const config: HardhatUserConfig = {
   defaultNetwork: "local",
   networks: {
     local: {
-      // url: "http://test1.peaq.network:10044",
+      url: "http://test1.peaq.network:10044",
       accounts: [
         "0x6e26f3ed3e362f1edb359f77a83641787934a73426089f861a1a03d930feac5b",
       ],

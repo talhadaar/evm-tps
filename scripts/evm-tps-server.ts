@@ -5,20 +5,17 @@ import axios from "axios";
 import express from "express";
 import BodyParser from "body-parser";
 
-import { artifacts, ethers, network } from "hardhat";
+import { ethers, network } from "hardhat";
 
 import { Wallet } from "@ethersproject/wallet";
 import { BigNumber } from "ethers";
 import { PopulatedTransaction } from "ethers/lib/ethers";
 
-import { deploy } from "./common";
 import { Block } from "@ethersproject/providers";
-import { formatBytes32String, randomBytes } from "ethers/lib/utils";
-import { Contract, Web3 } from "web3";
+import { randomBytes } from "ethers/lib/utils";
 const EVM_TPS_ROOT_DIR = process.env.ROOT_DIR || "data";
 const EVM_TPS_CONFIG_FILE = `${EVM_TPS_ROOT_DIR}/config.json`;
 const EVM_TPS_SENDERS_FILE = `${EVM_TPS_ROOT_DIR}/senders.json`;
-// const EVM_TPS_RECEIVERS_FILE = `${EVM_TPS_ROOT_DIR}/receivers.json`;
 
 interface Balances {
   before: number,
@@ -84,7 +81,7 @@ interface TPSConfig {
   estimate: boolean | undefined;
   payloads: UnsignedTx[] | PopulatedTransaction[] | undefined;
   verbose: boolean;
-  targetContract: string
+  targetContract: string;
 }
 
 interface UnsignedTx {
@@ -143,15 +140,13 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
     estimate: false,
     payloads: undefined,
     verbose: false,
-    targetContract: ""
+    targetContract: "",
   };
 
   if (fs.existsSync(configFilename)) {
     const fromJSON = await readJSON(configFilename);
     config = { ...config, ...fromJSON };
   }
-
-  const gasLimit = ethers.BigNumber.from(config.gasLimit);
 
   chainGasPrice = await ethers.provider.getGasPrice();
   if (chainGasPrice.mul(2).gt(gasPrice)) gasPrice = chainGasPrice.mul(2);
@@ -163,15 +158,6 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
     const bytecode = await ethers.provider.getCode(tokenAddress);
     if (bytecode.length <= 2) tokenAddress = "";  // 0x
   }
-
-  // if (tokenAddress === "" && config.payloads === undefined) {
-  //   const token = await deploy(deployer);
-  //   let tx = await token.start({ gasLimit, gasPrice });
-  //   await tx.wait();
-  //   tx = await token.mintTo(deployer.address, config.tokenAmountToMint);
-  //   await tx.wait();
-  //   config.tokenAddress = token.address;
-  // }
 
   await promisify(fs.writeFile)(configFilename, JSON.stringify(config, null, 2));
 
@@ -189,8 +175,8 @@ const setTxpool = async (config: TPSConfig, deployer: Wallet) => {
   else {
 
   const token = await ethers.getContractAt("RBAC", config.tokenAddress, deployer);
-  estimateGasTx = await token.estimateGas.addRole(randomBytes(32), randomBytes(32));
-    console.log("Gas estimated:- ", gasLimit);
+  estimateGasTx = await token.estimateGas.addRole(randomBytes(32), randomBytes(64), {gasPrice: chainGasPrice.mul(2), gasLimit: lastBlock.gasLimit.mul(2).div(3)});
+    console.log("Gas estimated:- ", estimateGasTx);
   }
 
   if (estimateGasTx.gt(gasLimit)) {
@@ -278,7 +264,7 @@ const waitForResponse = async (config: TPSConfig, method: string, params: any[],
       let r = await post(config, method, params);
       result = r.result;
       if (result) break;
-    } catch (err: any) { console.log(`ERROR: waitForResponse() -> ${err}`) }
+    } catch (err: any) { console.log(`ERROR: waitForResponse() -> ${err} method:- ${method}`) }
     counter++;
     if (counter >= retries) break;
     await new Promise(r => setTimeout(r, delay));
@@ -286,36 +272,6 @@ const waitForResponse = async (config: TPSConfig, method: string, params: any[],
   return result;
 }
 
-const batchMintTokens = async (config: TPSConfig, deployer: Wallet) => {
-  const token = (await ethers.getContractFactory("SimpleToken", deployer)).attach(config.tokenAddress);
-
-  const gasLimit = ethers.BigNumber.from("1000000");
-  const chainId = await deployer.getChainId();
-
-  let nonce = await deployer.getTransactionCount();
-
-  let txHash;
-  for (let k = 0; k < sendersMap.size; k++) {
-    const sender = sendersMap.get(k)!;
-    let unsigned = await token.populateTransaction.mintTo(sender.address, config.tokenAmountToMint);
-    unsigned = {
-      ...unsigned,
-      gasLimit,
-      gasPrice,
-      nonce,
-      chainId,
-    };
-    let payload = await deployer.signTransaction(unsigned);
-    let data = await post(config, "eth_sendRawTransaction", [payload]);
-    let txHash = data.result;
-    if (!validTxHash(txHash)) throw Error(`[ERROR] batchMintTokens() -> ${JSON.stringify(data)}`);
-    console.log(`[batchMintTokens] Minting tokens to ${sender.address} -> ${txHash}`);
-    if ((k + 1) % 500 === 0) await new Promise(r => setTimeout(r, 6000));
-    nonce++;
-  }
-  await getReceiptLocally(txHash!, 500, 60);
-  return nonce;
-}
 
 const batchSendEthers = async (config: TPSConfig, deployer: Wallet, nonce: number | null) => {
   const gasLimit = ethers.BigNumber.from("1000000");
@@ -329,7 +285,7 @@ const batchSendEthers = async (config: TPSConfig, deployer: Wallet, nonce: numbe
     let unsigned = {
       from: deployer.address,
       to: sender.address,
-      value: ethers.utils.parseEther("1000"),
+      value: ethers.utils.parseEther("100000000000"),
       gasLimit,
       gasPrice,
       nonce,
@@ -355,12 +311,9 @@ const sendRawTransaction = async (
   chainId: number,
 ) => {
   const sender = sendersMap.get(k)!;
-  const receiver = receiversMap.get(k)!;
-
-  // // const token = (await ethers.getContractFactory("SimpleToken", sender)).attach(config.tokenAddress);
 
   const token = await ethers.getContractAt("RBAC", config.tokenAddress, sender);
-  const tx = await token.addRole(randomBytes(32), randomBytes(32));
+  const tx = await token.addRole(randomBytes(32), randomBytes(32), { gasLimit: gasLimit, gasPrice: gasPrice });
   if (!validTxHash(tx.hash)) throw Error(`[ERROR] sendRawTransaction() -> ${JSON.stringify(tx)}`);
   return tx.hash;
 }
@@ -459,34 +412,11 @@ const checkTxpool = async (config: TPSConfig) => {
   }
 }
 
-const checkTokenBalances = async (config: TPSConfig, deployer: Wallet) => {
-  const token = (await ethers.getContractFactory("SimpleToken", deployer)).attach(config.tokenAddress);
-  const sender = sendersMap.get(0)!;
-  const balance = await token.balanceOf(sender.address);
-  console.log(`[checkTokenBalances] ${sender.address} token balance: ${balance}`);
-  if (balance.isZero()) return await batchMintTokens(config, deployer);
-}
-
 const checkETHBalances = async (config: TPSConfig, deployer: Wallet, nonce: number | null) => {
   const sender = sendersMap.get(0)!;
   const balance = await sender.getBalance();
   console.log(`[checkETHBalances] ${sender.address} ETH balance: ${balance}`);
   if (balance.lte(ethers.utils.parseEther("750"))) await batchSendEthers(config, deployer, nonce);
-}
-
-const assertTokenBalances = async (config: TPSConfig) => {
-  let diffs = 0;
-  const receiver = receiversMap.get(0)!;
-  const token = (await ethers.getContractFactory("SimpleToken", receiver)).attach(config.tokenAddress);
-  for (let k = 0; k < config.accounts; k++) {
-    const amounts = rcvBalances.get(k)!;
-    const receiver = receiversMap.get(k)!;
-    const amount = await token.balanceOf(receiver.address);
-    const ok = amounts.after === amount.toNumber();
-    if (!ok) diffs++;
-  }
-  if (diffs > 0) console.log(`[assertTokenBalances][ERROR] Balance is different for ${diffs} receivers. ***`);
-  else console.log(`[assertTokenBalances] OK`);
 }
 
 const updateNonces = async (config: TPSConfig) => {
@@ -495,17 +425,6 @@ const updateNonces = async (config: TPSConfig) => {
     const nonce = await sender.getTransactionCount();
     console.log(`[updateNonces] ${sender.address} -> ${nonce}`);
     nonceMap.set(k, nonce);
-  }
-}
-
-const updateBalances = async (config: TPSConfig) => {
-  const receiver = receiversMap.get(0)!;
-  const token = (await ethers.getContractFactory("SimpleToken", receiver)).attach(config.tokenAddress);
-  for (let k = 0; k < config.accounts; k++) {
-    const receiver = receiversMap.get(k)!;
-    const amount = await token.balanceOf(receiver.address);
-    console.log(`[updateBalances] ${receiver.address} -> ${amount}`);
-    rcvBalances.set(k, { before: amount.toNumber(), after: amount.toNumber() });
   }
 }
 
