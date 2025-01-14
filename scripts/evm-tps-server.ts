@@ -164,6 +164,29 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
   return config;
 }
 
+const defaultParams = async (config: TPSConfig, deployer: Wallet) => {
+  if (config.targetContract === "Storage") {
+    if (config.tokenMethod === "addItem"){
+      return [randomBytes(64), randomBytes(256)];
+    }
+  }
+
+  // TODO fix this up
+  if (config.targetContract == "DID") {
+    if (config.tokenMethod == "addAttribute") {
+      ["aa", "bb"]
+    }
+  }
+
+  if (config.targetContract == "RBAC") {
+    if (config.tokenMethod == "addRole") {
+      return [randomBytes(32), randomBytes(64)];
+    }
+  }
+
+  return [randomBytes(32), randomBytes(32)];
+}
+
 const setTxpool = async (config: TPSConfig, deployer: Wallet) => {
   let lastBlock = await ethers.provider.getBlock("latest");
 
@@ -174,8 +197,13 @@ const setTxpool = async (config: TPSConfig, deployer: Wallet) => {
   if (config.payloads?.length) estimateGasTx = await ethers.provider.estimateGas(config.payloads[0]);
   else {
 
-  const token = await ethers.getContractAt("RBAC", config.tokenAddress, deployer);
-  estimateGasTx = await token.estimateGas.addRole(randomBytes(32), randomBytes(64), {gasPrice: chainGasPrice.mul(2), gasLimit: lastBlock.gasLimit.mul(2).div(3)});
+  const token = await ethers.getContractAt(config.targetContract, config.tokenAddress, deployer);
+  const defaultArgs = await defaultParams(config, deployer);
+
+  estimateGasTx = await token.estimateGas[config.tokenMethod](
+    ...defaultArgs.flat(),
+    { gasPrice: chainGasPrice.mul(2), gasLimit: lastBlock.gasLimit.mul(2).div(3) }
+  )
     console.log("Gas estimated:- ", estimateGasTx);
   }
 
@@ -285,7 +313,7 @@ const batchSendEthers = async (config: TPSConfig, deployer: Wallet, nonce: numbe
     let unsigned = {
       from: deployer.address,
       to: sender.address,
-      value: ethers.utils.parseEther("100000000000"),
+      value: ethers.utils.parseEther("1000000"),
       gasLimit,
       gasPrice,
       nonce,
@@ -312,8 +340,13 @@ const sendRawTransaction = async (
 ) => {
   const sender = sendersMap.get(k)!;
 
-  const token = await ethers.getContractAt("RBAC", config.tokenAddress, sender);
-  const tx = await token.addRole(randomBytes(32), randomBytes(32), { gasLimit: gasLimit, gasPrice: gasPrice });
+  const token = await ethers.getContractAt(config.targetContract, config.tokenAddress, sender);
+  const args = await defaultParams(config, sender);
+  const tx = await token[config.tokenMethod](
+    ...args,
+    { gasLimit: gasLimit, gasPrice: gasPrice }
+  );
+
   if (!validTxHash(tx.hash)) throw Error(`[ERROR] sendRawTransaction() -> ${JSON.stringify(tx)}`);
   return tx.hash;
 }

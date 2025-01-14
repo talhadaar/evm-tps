@@ -12,8 +12,8 @@
   "workers": 80,
   "sendRawTransaction": true,
   "timeout": 15000,
-  "tokenAddress": "0x0000000000000000000000000000000000000802",
-  "tokenMethod": "addAttribute",
+  "tokenAddress": "0x0000000000000000000000000000000000000801",
+  "tokenMethod": "addItem",
   "tokenAmountToMint": 1000000000,
   "tokenTransferMultiplier": 1,
   "tokenAssert": true,
@@ -25,5 +25,5 @@
   "checkersInterval": 250,
   "estimate": false,
   "verbose": false,
-  "targetContract": "RBAC"
+  "targetContract": "Storage"
 }
