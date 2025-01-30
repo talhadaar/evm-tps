@@ -164,6 +164,16 @@ const setConfig = async (configFilename: string, deployer: Wallet) => {
   return config;
 }
 
+function createRandomString(length) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+
 const defaultParams = async (config: TPSConfig, deployer: Wallet) => {
   if (config.targetContract === "Storage") {
     if (config.tokenMethod === "addItem"){
@@ -171,10 +181,13 @@ const defaultParams = async (config: TPSConfig, deployer: Wallet) => {
     }
   }
 
-  // TODO fix this up
   if (config.targetContract == "DID") {
     if (config.tokenMethod == "addAttribute") {
-      ["aa", "bb"]
+      let validFor = await ethers.provider.getBlockNumber() + 1024;
+      // didAccount, name, value, validity_for
+      let addr = await deployer.getAddress();
+      
+      return [addr, Buffer.from(createRandomString(64)), Buffer.from(createRandomString(2560)), validFor]
     }
   }
 
@@ -313,7 +326,7 @@ const batchSendEthers = async (config: TPSConfig, deployer: Wallet, nonce: numbe
     let unsigned = {
       from: deployer.address,
       to: sender.address,
-      value: ethers.utils.parseEther("1000000"),
+      value: ethers.utils.parseEther("1000000000000"),
       gasLimit,
       gasPrice,
       nonce,
